@@ -1,0 +1,78 @@
+name: WFUSB Function Data Update
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.wfusb-function-data-trigger.txt'
+      - '.github/workflows/wfusb-function-data-update.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  update-function-data:
+    if: ${{ !contains(github.event.head_commit.message, '[skip function data]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install parser
+        run: python -m pip install beautifulsoup4
+      - name: Update MSA function table
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from bs4 import BeautifulSoup
+          rows=[
+            ('Accounting',588,'96.1%','Dominant MSA employment function; includes records previously not coded in FDS and should anchor public-accounting, audit, tax, advisory, and accounting searches.'),
+            ('Consulting',9,'1.5%','Major recurring function; use this as a high-priority search lane while comparing fit with adjacent pathways.'),
+            ('Finance',7,'1.1%','Major recurring function; use this as a high-priority search lane while comparing fit with adjacent pathways.'),
+            ('Other / Unclassified',4,'0.7%','Residual or uncoded function records; use employer, job-title, and coaching evidence to interpret these outcomes.'),
+            ('Information Technology',2,'0.3%','Lower-volume but legitimate pathway; use targeted employer research and a clear story if pursuing this direction.'),
+            ('Analytics / Data Analytics',1,'0.2%','Lower-volume but legitimate pathway; use targeted employer research and a clear story if pursuing this direction.'),
+            ('Marketing / Sales',1,'0.2%','Lower-volume but legitimate pathway; use targeted employer research and a clear story if pursuing this direction.'),
+          ]
+          insights='''<div class="insight-row"><div class="insight-card"><span class="insight-num">96.1%</span><span class="insight-label">Accounting<br/><small style="color:var(--text-muted)">588 students · #1 function</small></span></div><div class="insight-card"><span class="insight-num">1.5%</span><span class="insight-label">Consulting<br/><small style="color:var(--text-muted)">9 students · #2 function</small></span></div><div class="insight-card"><span class="insight-num">1.1%</span><span class="insight-label">Finance<br/><small style="color:var(--text-muted)">7 students · #3 function</small></span></div><div class="insight-card"><span class="insight-num">98.7%</span><span class="insight-label">Top 3 functions combined<br/><small style="color:var(--text-muted)">604 of 612 outcomes</small></span></div></div>'''
+          colors=['#6B5520','#1D4ED8','#166534','#B45309','#7C3AED','#0891B2']
+          body=''
+          rank=0
+          for name,count,pct,imp in rows:
+              if name=='Other / Unclassified':
+                  r='—'; color='var(--text-muted)'; fn=name
+              else:
+                  rank+=1; r=str(rank); color=colors[min(rank-1,5)]; fn=f'<strong>{name}</strong>' if rank<=3 else name
+              body += f'<tr><td>{r}</td><td>{fn}</td><td>{count}</td><td>{pct}</td><td style="color:{color};">{imp}</td></tr>'
+          table=f'<table class="skills-table"><thead><tr><th>Rank</th><th>Function</th><th>Count</th><th>% of total</th><th>Student search implication</th></tr></thead><tbody>{body}</tbody></table>'
+          html=Path('index.html').read_text(encoding='utf-8')
+          soup=BeautifulSoup(html,'html.parser')
+          fp=soup.find(id='function-placements')
+          section=fp.find('div', class_='section') if fp else None
+          if section:
+              d=section.find(class_='section-desc')
+              if d: d.clear(); d.append('Functional areas of the jobs MSA graduates accepted (2018–2025), using the updated FDS Historical function extract. Records previously listed as not coded in FDS have been assigned to Accounting so the page reflects Accounting as the primary MSA employment function.')
+              old=section.find('div', class_='insight-row')
+              if old: old.replace_with(BeautifulSoup(insights,'html.parser'))
+              t=section.find('table', class_='skills-table')
+              if t: t.replace_with(BeautifulSoup(table,'html.parser'))
+              note=section.find('div', style=lambda x: x and 'font-size:11px' in x)
+              if note:
+                  note.clear(); note.append('Counts are from the uploaded MSA FDS Historical function data for 2018–2025. Records previously listed as Function not coded in FDS have been assigned to Accounting for this section. Read percentages as directional evidence, not as a rule limiting your search.')
+          Path('index.html').write_text(str(soup), encoding='utf-8')
+          PY
+      - name: Commit updated index
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          if git diff --cached --quiet; then
+            echo "No function data updates needed."
+          else
+            git commit -m "Update function outcome tables [skip function data]"
+            git push
+          fi
